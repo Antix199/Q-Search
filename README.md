@@ -11,4 +11,4 @@ Este repositorio incluye la documentación generada desde el segundo avance en a
 
 *  **Informes de avance:** [Informes de avance](Informes%20de%20avance/)
 *  **Resultados individuales de las ejecuciones del segundo avance:** [Resultados individuales 2 avance](Resultados%20individuales%202%20avance/)
-*  **Figuras y tablas comparativas generadas durante el segundo avance:** [Figuras y tablas comparativas 2 Avance](Figuras%20y%20tablas%20comparativas%202%20Avance/)
+*  **Figuras y tablas comparativas generadas durante el segundo avance:** [Figuras y tablas comparativas 2 Avance](Figuras%20y%20tablas%20comparativas%202%20Avance/) (12 Archivos)
