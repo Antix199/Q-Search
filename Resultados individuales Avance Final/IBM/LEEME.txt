@@ -1,0 +1,8 @@
+Resultados de hardware cuántico real (IBM Quantum, Nivel 3: n = 2 y n = 4).
+
+Pendiente: se ejecutará con quantum_search_ibm.py cuando haya backends
+disponibles (al momento de esta subida las QPUs estaban en mantenimiento).
+
+Al completarse se añadirán aquí los archivos:
+  results_ibm_2q.csv
+  results_ibm_4q.csv

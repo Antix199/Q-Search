@@ -1,0 +1,14 @@
+# Credenciales (NUNCA subir tokens al repo)
+.env
+
+# Entornos y cachés de Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Salidas generadas al ejecutar el código (se archivan aparte en el repo)
+results/
+
+# IDE
+.idea/
