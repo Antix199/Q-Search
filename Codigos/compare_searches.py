@@ -1,17 +1,25 @@
-"""Análisis comparativo exhaustivo: Clásico vs Aer vs QRydDemo vs IBM (HW real).
+"""Análisis comparativo exhaustivo: Clásico vs Aer vs QRydDemo vs IQM (HW real).
 
 Métricas calculadas por nivel de qubits:
   1. Iteraciones promedio / mediana / desv. estándar
   2. Tiempo de búsqueda promedio / mediana / desv. estándar
   3. Speedup cuántico vs clásico (iteraciones y tiempo)
   4. Ratio iteraciones requeridas / iteraciones teóricas de Grover
-  5. Tasa de éxito (% corridas que encontraron la llave)
-  6. Profundidad del circuito transpilado
-  7. Número total de compuertas
-  8. Compuertas por qubit (complejidad relativa del circuito)
-  9. Evaluaciones de k realizadas (coste de barrido cuántico)
- 10. Entropía de Shannon de la distribución de mediciones (solo QRydDemo)
- 11. Ratio iteraciones clásicas vs esperado teórico (N/2)
+  5. Tasa de éxito (frecuencia de la llave; "éxito" = tasa >= 90%)
+  6. Acierto top-1 (% de corridas donde el estado más medido ES la llave)
+  7. Profundidad del circuito transpilado
+  8. Número total de compuertas
+  9. Compuertas por qubit (complejidad relativa del circuito)
+ 10. Evaluaciones de k realizadas (coste de barrido cuántico)
+ 11. Entropía de Shannon de la distribución de mediciones
+ 12. Ratio iteraciones clásicas vs esperado teórico (N/2)
+
+Nota sobre "tasa de éxito" vs "acierto top-1"
+─────────────────────────────────────────────
+- Acierto top-1: ¿el estado más probable coincide con la llave? Mide si Grover
+  APUNTA al estado correcto. En hardware real suele mantenerse alto.
+- Tasa de éxito (>= 90%): mide la CALIDAD/confianza de la medición. En hardware
+  real cae por decoherencia aunque el top-1 siga siendo la llave.
 
 Gráficos generados:
   Fig 1  – Iteraciones requeridas vs qubits  (escala log, + curvas O(N) y O(√N))
@@ -22,6 +30,7 @@ Gráficos generados:
   Fig 6  – Tasa de éxito cuántica vs qubits
   Fig 7  – Eficiencia cuántica                (iter_requeridas / iter_teoricas)
   Fig 8  – Tabla comparativa resumen          (matplotlib table)
+  Fig 9  – Acierto top-1 vs tasa de éxito     (la brecha en hardware real)
 """
 
 import csv
@@ -45,13 +54,13 @@ QUBITS = [2, 4, 6, 8, 10, 12]
 COLOR_CLASICO = "#E74C3C"
 COLOR_AER = "#2980B9"
 COLOR_QRYD = "#27AE60"
-COLOR_IBM = "#E67E22"
+COLOR_IQM = "#9B59B6"
 COLOR_TEORICO = "#95A5A6"
 
 ESTILO_CLASICO = {"color": COLOR_CLASICO, "marker": "o", "linewidth": 2, "markersize": 7}
 ESTILO_AER = {"color": COLOR_AER, "marker": "s", "linewidth": 2, "markersize": 7}
 ESTILO_QRYD = {"color": COLOR_QRYD, "marker": "^", "linewidth": 2, "markersize": 7}
-ESTILO_IBM = {"color": COLOR_IBM, "marker": "D", "linewidth": 2, "markersize": 7}
+ESTILO_IQM = {"color": COLOR_IQM, "marker": "v", "linewidth": 2, "markersize": 7}
 ESTILO_TEORICO = {"color": COLOR_TEORICO, "linestyle": "--", "linewidth": 1.5}
 
 
@@ -83,6 +92,17 @@ def _int(val, default=None):
 
 def _bool(val):
     return str(val).strip().lower() in ("true", "1", "yes")
+
+
+def _acierto_top1_pct(filas: list[dict]):
+    """% de corridas donde estado_top1 == llave_objetivo_bin (el pico es la llave)."""
+    aciertos = []
+    for f in filas:
+        top1 = f.get("estado_top1")
+        llave = f.get("llave_objetivo_bin")
+        if top1 and llave:
+            aciertos.append(1 if top1 == llave else 0)
+    return statistics.mean(aciertos) * 100 if aciertos else None
 
 
 # ─── Extracción de métricas por sistema ───────────────────────────────────────
@@ -159,6 +179,7 @@ def metricas_aer(bits: int) -> dict | None:
         "tiempo_std": statistics.stdev(tiempos) if len(tiempos) > 1 else 0,
         "tasa_exito": statistics.mean(tasas),
         "tasa_exito_pct": statistics.mean(tasas) * 100,
+        "acierto_top1_pct": _acierto_top1_pct(filas),
         "n_encontradas": sum(encontradas),
         "profundidad_promedio": statistics.mean(profundidades) if profundidades else None,
         "evaluaciones_promedio": statistics.mean(evaluaciones) if evaluaciones else None,
@@ -167,7 +188,7 @@ def metricas_aer(bits: int) -> dict | None:
 
 
 def _metricas_extendidas(path: Path, bits: int) -> dict | None:
-    """Métricas para backends con CSV extendido (QRydDemo e IBM son idénticos)."""
+    """Métricas para backends con CSV extendido (QRydDemo e IQM son idénticos)."""
     filas = leer_csv(path)
     if not filas:
         return None
@@ -227,6 +248,7 @@ def _metricas_extendidas(path: Path, bits: int) -> dict | None:
         "tiempo_std": statistics.stdev(tiempos) if len(tiempos) > 1 else 0,
         "tasa_exito": statistics.mean(tasas) if tasas else None,
         "tasa_exito_pct": statistics.mean(tasas) * 100 if tasas else None,
+        "acierto_top1_pct": _acierto_top1_pct(filas),
         "n_encontradas": sum(encontradas),
         "profundidad_promedio": statistics.mean(profundidades) if profundidades else None,
         "compuertas_promedio": statistics.mean(compuertas) if compuertas else None,
@@ -240,9 +262,9 @@ def metricas_qryd(bits: int) -> dict | None:
     return _metricas_extendidas(RESULTADOS_DIR / f"results_qryd_{bits}q.csv", bits)
 
 
-def metricas_ibm(bits: int) -> dict | None:
-    """Hardware real IBM: mismo CSV extendido que QRyd → mismas métricas."""
-    return _metricas_extendidas(RESULTADOS_DIR / f"results_ibm_{bits}q.csv", bits)
+def metricas_iqm(bits: int) -> dict | None:
+    """Hardware real IQM Resonance: mismo CSV extendido que QRyd → mismas métricas."""
+    return _metricas_extendidas(RESULTADOS_DIR / f"results_iqm_{bits}q.csv", bits)
 
 
 # ─── Recolección de todos los datos ──────────────────────────────────────────
@@ -254,7 +276,7 @@ def recolectar_datos() -> dict:
             "clasico": metricas_clasico(bits),
             "aer": metricas_aer(bits),
             "qryd": metricas_qryd(bits),
-            "ibm": metricas_ibm(bits),
+            "iqm": metricas_iqm(bits),
         }
     return datos
 
@@ -287,7 +309,7 @@ def fig_iteraciones(datos):
     xs_c, ys_c = _bits_con_dato(datos, "clasico", "iter_promedio")
     xs_a, ys_a = _bits_con_dato(datos, "aer", "iter_promedio")
     xs_q, ys_q = _bits_con_dato(datos, "qryd", "iter_promedio")
-    xs_i, ys_i = _bits_con_dato(datos, "ibm", "iter_promedio")
+    xs_m, ys_m = _bits_con_dato(datos, "iqm", "iter_promedio")
 
     if xs_c:
         ax.plot(xs_c, ys_c, label="Clásico (promedio)", **ESTILO_CLASICO)
@@ -299,8 +321,8 @@ def fig_iteraciones(datos):
         ax.plot(xs_a, ys_a, label="Aer (promedio)", **ESTILO_AER)
     if xs_q:
         ax.plot(xs_q, ys_q, label="QRydDemo (promedio)", **ESTILO_QRYD)
-    if xs_i:
-        ax.plot(xs_i, ys_i, label="IBM (hardware real)", **ESTILO_IBM)
+    if xs_m:
+        ax.plot(xs_m, ys_m, label="IQM (hardware real)", **ESTILO_IQM)
 
     # Curvas teóricas de referencia
     q_ref = np.linspace(2, 12, 100)
@@ -327,7 +349,7 @@ def fig_tiempo(datos):
     xs_c, ys_c = _bits_con_dato(datos, "clasico", "tiempo_promedio")
     xs_a, ys_a = _bits_con_dato(datos, "aer", "tiempo_promedio")
     xs_q, ys_q = _bits_con_dato(datos, "qryd", "tiempo_promedio")
-    xs_i, ys_i = _bits_con_dato(datos, "ibm", "tiempo_promedio")
+    xs_m, ys_m = _bits_con_dato(datos, "iqm", "tiempo_promedio")
 
     if xs_c:
         ax.plot(xs_c, ys_c, label="Clásico", **ESTILO_CLASICO)
@@ -343,8 +365,8 @@ def fig_tiempo(datos):
                         color=COLOR_AER, alpha=0.15)
     if xs_q:
         ax.plot(xs_q, ys_q, label="QRydDemo (emulador)", **ESTILO_QRYD)
-    if xs_i:
-        ax.plot(xs_i, ys_i, label="IBM (hardware real, incluye cola)", **ESTILO_IBM)
+    if xs_m:
+        ax.plot(xs_m, ys_m, label="IQM (hardware real, incluye cola)", **ESTILO_IQM)
 
     ax.set_yscale("log")
     ax.set_xlabel("Número de qubits", fontsize=12)
@@ -363,16 +385,16 @@ def fig_speedup(datos):
 
     xs_a_i, ys_a_i = [], []
     xs_q_i, ys_q_i = [], []
-    xs_i_i, ys_i_i = [], []
+    xs_m_i, ys_m_i = [], []
     xs_a_t, ys_a_t = [], []
     xs_q_t, ys_q_t = [], []
-    xs_i_t, ys_i_t = [], []
+    xs_m_t, ys_m_t = [], []
 
     for bits in QUBITS:
         cl = datos[bits]["clasico"]
         ae = datos[bits]["aer"]
         qr = datos[bits]["qryd"]
-        ib = datos[bits]["ibm"]
+        iq = datos[bits]["iqm"]
 
         if cl and ae and cl["iter_promedio"] and ae["iter_promedio"]:
             xs_a_i.append(bits)
@@ -380,9 +402,9 @@ def fig_speedup(datos):
         if cl and qr and cl["iter_promedio"] and qr.get("iter_promedio"):
             xs_q_i.append(bits)
             ys_q_i.append(cl["iter_promedio"] / qr["iter_promedio"])
-        if cl and ib and cl["iter_promedio"] and ib.get("iter_promedio"):
-            xs_i_i.append(bits)
-            ys_i_i.append(cl["iter_promedio"] / ib["iter_promedio"])
+        if cl and iq and cl["iter_promedio"] and iq.get("iter_promedio"):
+            xs_m_i.append(bits)
+            ys_m_i.append(cl["iter_promedio"] / iq["iter_promedio"])
 
         if cl and ae and cl.get("tiempo_promedio") and ae.get("tiempo_promedio"):
             xs_a_t.append(bits)
@@ -390,9 +412,9 @@ def fig_speedup(datos):
         if cl and qr and cl.get("tiempo_promedio") and qr.get("tiempo_promedio"):
             xs_q_t.append(bits)
             ys_q_t.append(cl["tiempo_promedio"] / qr["tiempo_promedio"])
-        if cl and ib and cl.get("tiempo_promedio") and ib.get("tiempo_promedio"):
-            xs_i_t.append(bits)
-            ys_i_t.append(cl["tiempo_promedio"] / ib["tiempo_promedio"])
+        if cl and iq and cl.get("tiempo_promedio") and iq.get("tiempo_promedio"):
+            xs_m_t.append(bits)
+            ys_m_t.append(cl["tiempo_promedio"] / iq["tiempo_promedio"])
 
     # Speedup teórico esperado = (N/2) / (π/4·√N) = 2√N/π
     q_ref = np.array(QUBITS, dtype=float)
@@ -404,8 +426,8 @@ def fig_speedup(datos):
         ax1.plot(xs_a_i, ys_a_i, label="Aer vs Clásico", **ESTILO_AER)
     if xs_q_i:
         ax1.plot(xs_q_i, ys_q_i, label="QRydDemo vs Clásico", **ESTILO_QRYD)
-    if xs_i_i:
-        ax1.plot(xs_i_i, ys_i_i, label="IBM vs Clásico", **ESTILO_IBM)
+    if xs_m_i:
+        ax1.plot(xs_m_i, ys_m_i, label="IQM vs Clásico", **ESTILO_IQM)
     ax1.axhline(1, color="gray", linestyle=":", linewidth=1)
     ax1.set_yscale("log")
     ax1.set_xlabel("Número de qubits", fontsize=11)
@@ -415,13 +437,13 @@ def fig_speedup(datos):
     ax1.legend(fontsize=9)
     ax1.grid(True, alpha=0.3)
 
-    if xs_a_t or xs_q_t or xs_i_t:
+    if xs_a_t or xs_q_t or xs_m_t:
         if xs_a_t:
             ax2.plot(xs_a_t, ys_a_t, label="Aer vs Clásico", **ESTILO_AER)
         if xs_q_t:
             ax2.plot(xs_q_t, ys_q_t, label="QRydDemo vs Clásico", **ESTILO_QRYD)
-        if xs_i_t:
-            ax2.plot(xs_i_t, ys_i_t, label="IBM vs Clásico", **ESTILO_IBM)
+        if xs_m_t:
+            ax2.plot(xs_m_t, ys_m_t, label="IQM vs Clásico", **ESTILO_IQM)
         ax2.axhline(1, color="gray", linestyle=":", linewidth=1, label="Sin speedup")
         ax2.set_xlabel("Número de qubits", fontsize=11)
         ax2.set_ylabel("Speedup en tiempo (t_clásico / t_cuántico)", fontsize=11)
@@ -445,16 +467,16 @@ def fig_profundidad(datos):
     fig, ax = plt.subplots(figsize=(10, 6))
     xs_a, ys_a = _bits_con_dato(datos, "aer", "profundidad_promedio")
     xs_q, ys_q = _bits_con_dato(datos, "qryd", "profundidad_promedio")
-    xs_i, ys_i = _bits_con_dato(datos, "ibm", "profundidad_promedio")
+    xs_m, ys_m = _bits_con_dato(datos, "iqm", "profundidad_promedio")
 
     if xs_a:
         ax.plot(xs_a, ys_a, label="Aer", **ESTILO_AER)
     if xs_q:
         ax.plot(xs_q, ys_q, label="QRydDemo", **ESTILO_QRYD)
-    if xs_i:
-        ax.plot(xs_i, ys_i, label="IBM (hardware real)", **ESTILO_IBM)
+    if xs_m:
+        ax.plot(xs_m, ys_m, label="IQM (hardware real)", **ESTILO_IQM)
 
-    if not xs_a and not xs_q and not xs_i:
+    if not xs_a and not xs_q and not xs_m:
         ax.text(0.5, 0.5, "Sin datos de profundidad disponibles",
                 ha="center", va="center", fontsize=12, transform=ax.transAxes)
     else:
@@ -472,15 +494,15 @@ def fig_profundidad(datos):
 def fig_compuertas(datos):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
     xs_q, ys_q = _bits_con_dato(datos, "qryd", "compuertas_promedio")
-    xs_i, ys_i = _bits_con_dato(datos, "ibm", "compuertas_promedio")
+    xs_m, ys_m = _bits_con_dato(datos, "iqm", "compuertas_promedio")
     xs_cpq_q, ys_cpq_q = _bits_con_dato(datos, "qryd", "compuertas_por_qubit")
-    xs_cpq_i, ys_cpq_i = _bits_con_dato(datos, "ibm", "compuertas_por_qubit")
+    xs_cpq_m, ys_cpq_m = _bits_con_dato(datos, "iqm", "compuertas_por_qubit")
 
-    if xs_q or xs_i:
+    if xs_q or xs_m:
         if xs_q:
             ax1.plot(xs_q, ys_q, label="QRydDemo", **ESTILO_QRYD)
-        if xs_i:
-            ax1.plot(xs_i, ys_i, label="IBM (hardware real)", **ESTILO_IBM)
+        if xs_m:
+            ax1.plot(xs_m, ys_m, label="IQM (hardware real)", **ESTILO_IQM)
         ax1.set_xlabel("Número de qubits", fontsize=11)
         ax1.set_ylabel("Número promedio de compuertas", fontsize=11)
         ax1.set_title("Compuertas totales vs qubits\n(circuito Grover transpilado)", fontsize=12, fontweight="bold")
@@ -488,22 +510,22 @@ def fig_compuertas(datos):
         ax1.legend(fontsize=10)
         ax1.grid(True, alpha=0.3)
     else:
-        ax1.text(0.5, 0.5, "Sin datos de compuertas disponibles\n(requiere datos QRydDemo o IBM)",
+        ax1.text(0.5, 0.5, "Sin datos de compuertas disponibles\n(requiere datos QRydDemo o IQM)",
                  ha="center", va="center", fontsize=11, transform=ax1.transAxes)
         ax1.axis("off")
 
-    if xs_cpq_q or xs_cpq_i:
+    if xs_cpq_q or xs_cpq_m:
         ancho = 0.35
         if xs_cpq_q:
             ax2.bar([x - ancho / 2 for x in xs_cpq_q], ys_cpq_q, width=ancho,
                     color=COLOR_QRYD, alpha=0.85, edgecolor="white", label="QRydDemo")
-        if xs_cpq_i:
-            ax2.bar([x + ancho / 2 for x in xs_cpq_i], ys_cpq_i, width=ancho,
-                    color=COLOR_IBM, alpha=0.85, edgecolor="white", label="IBM")
+        if xs_cpq_m:
+            ax2.bar([x + ancho / 2 for x in xs_cpq_m], ys_cpq_m, width=ancho,
+                    color=COLOR_IQM, alpha=0.85, edgecolor="white", label="IQM")
         ax2.set_xlabel("Número de qubits", fontsize=11)
         ax2.set_ylabel("Compuertas por qubit", fontsize=11)
         ax2.set_title("Complejidad relativa del circuito\n(compuertas / qubits)", fontsize=12, fontweight="bold")
-        ax2.set_xticks(sorted(set(xs_cpq_q) | set(xs_cpq_i)))
+        ax2.set_xticks(sorted(set(xs_cpq_q) | set(xs_cpq_m)))
         ax2.legend(fontsize=10)
         ax2.grid(True, alpha=0.3, axis="y")
     else:
@@ -522,16 +544,16 @@ def fig_tasa_exito(datos):
     fig, ax = plt.subplots(figsize=(10, 6))
     xs_a, ys_a = _bits_con_dato(datos, "aer", "tasa_exito_pct")
     xs_q, ys_q = _bits_con_dato(datos, "qryd", "tasa_exito_pct")
-    xs_i, ys_i = _bits_con_dato(datos, "ibm", "tasa_exito_pct")
+    xs_m, ys_m = _bits_con_dato(datos, "iqm", "tasa_exito_pct")
 
     if xs_a:
         ax.plot(xs_a, ys_a, label="Aer", **ESTILO_AER)
     if xs_q:
         ax.plot(xs_q, ys_q, label="QRydDemo", **ESTILO_QRYD)
-    if xs_i:
-        ax.plot(xs_i, ys_i, label="IBM (hardware real)", **ESTILO_IBM)
+    if xs_m:
+        ax.plot(xs_m, ys_m, label="IQM (hardware real)", **ESTILO_IQM)
 
-    if xs_a or xs_q or xs_i:
+    if xs_a or xs_q or xs_m:
         ax.axhline(90, color="orange", linestyle="--", linewidth=1.5, label="Umbral de éxito (90%)")
         ax.set_ylim(0, 105)
         ax.set_xlabel("Número de qubits", fontsize=12)
@@ -553,29 +575,29 @@ def fig_eficiencia(datos):
     """Ratio iter_requeridas / iter_teoricas_Grover (1 = óptimo teórico)."""
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    xs_a, ys_a, xs_q, ys_q, xs_i, ys_i = [], [], [], [], [], []
+    xs_a, ys_a, xs_q, ys_q, xs_m, ys_m = [], [], [], [], [], []
     for bits in QUBITS:
         ae = datos[bits]["aer"]
         qr = datos[bits]["qryd"]
-        ib = datos[bits]["ibm"]
+        iq = datos[bits]["iqm"]
         if ae and ae.get("ratio_vs_teorico") is not None:
             xs_a.append(bits)
             ys_a.append(ae["ratio_vs_teorico"])
         if qr and qr.get("ratio_vs_teorico") is not None:
             xs_q.append(bits)
             ys_q.append(qr["ratio_vs_teorico"])
-        if ib and ib.get("ratio_vs_teorico") is not None:
-            xs_i.append(bits)
-            ys_i.append(ib["ratio_vs_teorico"])
+        if iq and iq.get("ratio_vs_teorico") is not None:
+            xs_m.append(bits)
+            ys_m.append(iq["ratio_vs_teorico"])
 
     if xs_a:
         ax.plot(xs_a, ys_a, label="Aer", **ESTILO_AER)
     if xs_q:
         ax.plot(xs_q, ys_q, label="QRydDemo", **ESTILO_QRYD)
-    if xs_i:
-        ax.plot(xs_i, ys_i, label="IBM (hardware real)", **ESTILO_IBM)
+    if xs_m:
+        ax.plot(xs_m, ys_m, label="IQM (hardware real)", **ESTILO_IQM)
 
-    if xs_a or xs_q or xs_i:
+    if xs_a or xs_q or xs_m:
         ax.axhline(1, color="gray", linestyle="--", linewidth=1.5, label="Óptimo teórico (ratio = 1)")
         ax.set_xlabel("Número de qubits", fontsize=12)
         ax.set_ylabel("iter_requeridas / iter_teóricas_Grover", fontsize=12)
@@ -595,13 +617,17 @@ def fig_eficiencia(datos):
 
 def fig_tabla(datos):
     columnas = ["Qubits", "N", "Clás. iter.\n(prom)", "Aer iter.\n(prom)",
-                "QRyd iter.\n(prom)", "IBM iter.\n(prom)", "Grover\nteórico",
+                "QRyd iter.\n(prom)", "IQM iter.\n(prom)",
+                "Grover\nteórico",
                 "Speedup iter.\nAer/Clás",
                 "Speedup iter.\nQRyd/Clás",
-                "Speedup iter.\nIBM/Clás",
+                "Speedup iter.\nIQM/Clás",
                 "Tasa éxito\nAer (%)",
                 "Tasa éxito\nQRyd (%)",
-                "Tasa éxito\nIBM (%)"]
+                "Tasa éxito\nIQM (%)",
+                "Acierto top-1\nAer (%)",
+                "Acierto top-1\nQRyd (%)",
+                "Acierto top-1\nIQM (%)"]
 
     filas_tabla = []
     for bits in QUBITS:
@@ -609,7 +635,7 @@ def fig_tabla(datos):
         cl = datos[bits]["clasico"]
         ae = datos[bits]["aer"]
         qr = datos[bits]["qryd"]
-        ib = datos[bits]["ibm"]
+        iq = datos[bits]["iqm"]
         teorico = math.floor((math.pi / 4) * math.sqrt(n))
 
         def fmt_iter(m): return f"{m['iter_promedio']:.1f}" if m else "—"
@@ -617,19 +643,20 @@ def fig_tabla(datos):
             if cl_m and q_m and q_m.get("iter_promedio"):
                 return f"{cl_m['iter_promedio'] / q_m['iter_promedio']:.2f}×"
             return "—"
-        def fmt_tasa(m, campo="tasa_exito_pct"):
+        def fmt_pct(m, campo):
             v = m.get(campo) if m else None
             return f"{v:.1f}" if v is not None else "—"
 
         filas_tabla.append([
             str(bits), f"{n:,}",
-            fmt_iter(cl), fmt_iter(ae), fmt_iter(qr), fmt_iter(ib),
+            fmt_iter(cl), fmt_iter(ae), fmt_iter(qr), fmt_iter(iq),
             str(teorico),
-            fmt_speedup(cl, ae), fmt_speedup(cl, qr), fmt_speedup(cl, ib),
-            fmt_tasa(ae), fmt_tasa(qr), fmt_tasa(ib),
+            fmt_speedup(cl, ae), fmt_speedup(cl, qr), fmt_speedup(cl, iq),
+            fmt_pct(ae, "tasa_exito_pct"), fmt_pct(qr, "tasa_exito_pct"), fmt_pct(iq, "tasa_exito_pct"),
+            fmt_pct(ae, "acierto_top1_pct"), fmt_pct(qr, "acierto_top1_pct"), fmt_pct(iq, "acierto_top1_pct"),
         ])
 
-    fig, ax = plt.subplots(figsize=(19, 4))
+    fig, ax = plt.subplots(figsize=(23, 4))
     ax.axis("off")
     tbl = ax.table(
         cellText=filas_tabla,
@@ -650,9 +677,52 @@ def fig_tabla(datos):
         else:
             cell.set_facecolor("white")
 
-    ax.set_title("Tabla comparativa: Clásico vs Aer vs QRydDemo",
+    ax.set_title("Tabla comparativa: Clásico vs Aer vs QRydDemo vs IQM (hardware real)",
                  fontsize=14, fontweight="bold", pad=20, y=0.85)
     _guardar(fig, "fig8_tabla_comparativa.png")
+
+
+# ─── Fig 9: Acierto top-1 vs tasa de éxito ────────────────────────────────────
+
+def fig_acierto_top1(datos):
+    """Contrasta 'acierto top-1' (línea sólida) con 'tasa de éxito >=90%' (punteada).
+
+    En hardware real (IQM) el top-1 se mantiene alto (Grover apunta a la llave)
+    aunque la tasa de éxito caiga por decoherencia: esa BRECHA es el mensaje.
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    series = [("aer", "Aer", ESTILO_AER, COLOR_AER),
+              ("qryd", "QRydDemo", ESTILO_QRYD, COLOR_QRYD),
+              ("iqm", "IQM (hardware real)", ESTILO_IQM, COLOR_IQM)]
+
+    hay_datos = False
+    for clave, nombre, estilo, color in series:
+        xs_t, ys_t = _bits_con_dato(datos, clave, "acierto_top1_pct")
+        xs_e, ys_e = _bits_con_dato(datos, clave, "tasa_exito_pct")
+        if xs_t:
+            hay_datos = True
+            ax.plot(xs_t, ys_t, label=f"{nombre} – acierto top-1", **estilo)
+        if xs_e:
+            ax.plot(xs_e, ys_e, color=color, marker=estilo["marker"], markersize=6,
+                    linestyle=":", linewidth=1.8, alpha=0.8,
+                    label=f"{nombre} – tasa éxito (≥90%)")
+
+    if hay_datos:
+        ax.axhline(90, color="orange", linestyle="--", linewidth=1.2, label="Umbral de éxito (90%)")
+        ax.set_ylim(0, 105)
+        ax.set_xlabel("Número de qubits", fontsize=12)
+        ax.set_ylabel("Porcentaje (%)", fontsize=12)
+        ax.set_title("Acierto top-1 vs tasa de éxito\n(sólida = ¿el pico es la llave? · punteada = ¿supera 90%?)",
+                     fontsize=13, fontweight="bold")
+        ax.set_xticks(QUBITS)
+        ax.legend(fontsize=8, ncol=2)
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.text(0.5, 0.5, "Sin datos de acierto top-1 disponibles",
+                ha="center", va="center", fontsize=12, transform=ax.transAxes)
+        ax.axis("off")
+    _guardar(fig, "fig9_acierto_top1.png")
 
 
 # ─── Tabla CSV de resumen ─────────────────────────────────────────────────────
@@ -670,25 +740,25 @@ def exportar_tabla_csv(datos):
         "aer_n_corridas", "aer_iter_promedio", "aer_iter_mediana", "aer_iter_std",
         "aer_tiempo_promedio_s", "aer_tiempo_std_s",
         "aer_iter_teorica_grover", "aer_ratio_vs_teorico",
-        "aer_tasa_exito_pct", "aer_profundidad_promedio",
+        "aer_tasa_exito_pct", "aer_acierto_top1_pct", "aer_profundidad_promedio",
         "aer_evaluaciones_promedio",
         "aer_speedup_iter_vs_clasico", "aer_speedup_tiempo_vs_clasico",
         # QRydDemo
         "qryd_n_corridas", "qryd_iter_promedio", "qryd_iter_mediana", "qryd_iter_std",
         "qryd_tiempo_promedio_s", "qryd_tiempo_std_s",
         "qryd_iter_teorica_grover", "qryd_ratio_vs_teorico",
-        "qryd_tasa_exito_pct", "qryd_profundidad_promedio",
+        "qryd_tasa_exito_pct", "qryd_acierto_top1_pct", "qryd_profundidad_promedio",
         "qryd_compuertas_promedio", "qryd_compuertas_por_qubit",
         "qryd_evaluaciones_promedio", "qryd_entropia_promedio",
         "qryd_speedup_iter_vs_clasico", "qryd_speedup_tiempo_vs_clasico",
-        # IBM (hardware real)
-        "ibm_n_corridas", "ibm_iter_promedio", "ibm_iter_mediana", "ibm_iter_std",
-        "ibm_tiempo_promedio_s", "ibm_tiempo_std_s",
-        "ibm_iter_teorica_grover", "ibm_ratio_vs_teorico",
-        "ibm_tasa_exito_pct", "ibm_profundidad_promedio",
-        "ibm_compuertas_promedio", "ibm_compuertas_por_qubit",
-        "ibm_evaluaciones_promedio", "ibm_entropia_promedio",
-        "ibm_speedup_iter_vs_clasico", "ibm_speedup_tiempo_vs_clasico",
+        # IQM Resonance (hardware real)
+        "iqm_n_corridas", "iqm_iter_promedio", "iqm_iter_mediana", "iqm_iter_std",
+        "iqm_tiempo_promedio_s", "iqm_tiempo_std_s",
+        "iqm_iter_teorica_grover", "iqm_ratio_vs_teorico",
+        "iqm_tasa_exito_pct", "iqm_acierto_top1_pct", "iqm_profundidad_promedio",
+        "iqm_compuertas_promedio", "iqm_compuertas_por_qubit",
+        "iqm_evaluaciones_promedio", "iqm_entropia_promedio",
+        "iqm_speedup_iter_vs_clasico", "iqm_speedup_tiempo_vs_clasico",
     ]
 
     def val(m, k):
@@ -719,7 +789,7 @@ def exportar_tabla_csv(datos):
             cl = datos[bits]["clasico"]
             ae = datos[bits]["aer"]
             qr = datos[bits]["qryd"]
-            ib = datos[bits]["ibm"]
+            iq = datos[bits]["iqm"]
             writer.writerow({
                 "bits": bits, "N": n,
                 "cl_n_corridas": val(cl, "n_corridas"),
@@ -739,6 +809,7 @@ def exportar_tabla_csv(datos):
                 "aer_iter_teorica_grover": val(ae, "iter_teorica_grover"),
                 "aer_ratio_vs_teorico": val(ae, "ratio_vs_teorico"),
                 "aer_tasa_exito_pct": val(ae, "tasa_exito_pct"),
+                "aer_acierto_top1_pct": val(ae, "acierto_top1_pct"),
                 "aer_profundidad_promedio": val(ae, "profundidad_promedio"),
                 "aer_evaluaciones_promedio": val(ae, "evaluaciones_promedio"),
                 "aer_speedup_iter_vs_clasico": speedup_iter(cl, ae),
@@ -752,6 +823,7 @@ def exportar_tabla_csv(datos):
                 "qryd_iter_teorica_grover": val(qr, "iter_teorica_grover"),
                 "qryd_ratio_vs_teorico": val(qr, "ratio_vs_teorico"),
                 "qryd_tasa_exito_pct": val(qr, "tasa_exito_pct"),
+                "qryd_acierto_top1_pct": val(qr, "acierto_top1_pct"),
                 "qryd_profundidad_promedio": val(qr, "profundidad_promedio"),
                 "qryd_compuertas_promedio": val(qr, "compuertas_promedio"),
                 "qryd_compuertas_por_qubit": val(qr, "compuertas_por_qubit"),
@@ -759,22 +831,23 @@ def exportar_tabla_csv(datos):
                 "qryd_entropia_promedio": val(qr, "entropia_promedio"),
                 "qryd_speedup_iter_vs_clasico": speedup_iter(cl, qr),
                 "qryd_speedup_tiempo_vs_clasico": speedup_tiempo(cl, qr),
-                "ibm_n_corridas": val(ib, "n_corridas"),
-                "ibm_iter_promedio": val(ib, "iter_promedio"),
-                "ibm_iter_mediana": val(ib, "iter_mediana"),
-                "ibm_iter_std": val(ib, "iter_std"),
-                "ibm_tiempo_promedio_s": val(ib, "tiempo_promedio"),
-                "ibm_tiempo_std_s": val(ib, "tiempo_std"),
-                "ibm_iter_teorica_grover": val(ib, "iter_teorica_grover"),
-                "ibm_ratio_vs_teorico": val(ib, "ratio_vs_teorico"),
-                "ibm_tasa_exito_pct": val(ib, "tasa_exito_pct"),
-                "ibm_profundidad_promedio": val(ib, "profundidad_promedio"),
-                "ibm_compuertas_promedio": val(ib, "compuertas_promedio"),
-                "ibm_compuertas_por_qubit": val(ib, "compuertas_por_qubit"),
-                "ibm_evaluaciones_promedio": val(ib, "evaluaciones_promedio"),
-                "ibm_entropia_promedio": val(ib, "entropia_promedio"),
-                "ibm_speedup_iter_vs_clasico": speedup_iter(cl, ib),
-                "ibm_speedup_tiempo_vs_clasico": speedup_tiempo(cl, ib),
+                "iqm_n_corridas": val(iq, "n_corridas"),
+                "iqm_iter_promedio": val(iq, "iter_promedio"),
+                "iqm_iter_mediana": val(iq, "iter_mediana"),
+                "iqm_iter_std": val(iq, "iter_std"),
+                "iqm_tiempo_promedio_s": val(iq, "tiempo_promedio"),
+                "iqm_tiempo_std_s": val(iq, "tiempo_std"),
+                "iqm_iter_teorica_grover": val(iq, "iter_teorica_grover"),
+                "iqm_ratio_vs_teorico": val(iq, "ratio_vs_teorico"),
+                "iqm_tasa_exito_pct": val(iq, "tasa_exito_pct"),
+                "iqm_acierto_top1_pct": val(iq, "acierto_top1_pct"),
+                "iqm_profundidad_promedio": val(iq, "profundidad_promedio"),
+                "iqm_compuertas_promedio": val(iq, "compuertas_promedio"),
+                "iqm_compuertas_por_qubit": val(iq, "compuertas_por_qubit"),
+                "iqm_evaluaciones_promedio": val(iq, "evaluaciones_promedio"),
+                "iqm_entropia_promedio": val(iq, "entropia_promedio"),
+                "iqm_speedup_iter_vs_clasico": speedup_iter(cl, iq),
+                "iqm_speedup_tiempo_vs_clasico": speedup_tiempo(cl, iq),
             })
     print(f"  CSV exportado: {path}")
 
@@ -784,14 +857,14 @@ def exportar_tabla_csv(datos):
 def imprimir_resumen_consola(datos):
     linea = "─" * 106
     print(f"\n{'═' * 106}")
-    print("  ANÁLISIS COMPARATIVO: Clásico | Aer | QRydDemo | IBM (hardware real)")
+    print("  ANÁLISIS COMPARATIVO: Clásico | Aer | QRydDemo | IQM (hardware real)")
     print(f"{'═' * 106}")
     for bits in QUBITS:
         n = 2 ** bits
         cl = datos[bits]["clasico"]
         ae = datos[bits]["aer"]
         qr = datos[bits]["qryd"]
-        ib = datos[bits]["ibm"]
+        iq = datos[bits]["iqm"]
         teorico = math.floor((math.pi / 4) * math.sqrt(n))
 
         print(f"\n{linea}")
@@ -813,6 +886,9 @@ def imprimir_resumen_consola(datos):
         def fmt_tasa(m):
             v = m.get("tasa_exito_pct") if m else None
             return f"{v:.1f}%" if v is not None else "—"
+        def fmt_top1(m):
+            v = m.get("acierto_top1_pct") if m else None
+            return f"{v:.1f}%" if v is not None else "—"
         def fmt_prof(m):
             v = m.get("profundidad_promedio") if m else None
             return f"{v:.1f}" if v is not None else "—"
@@ -826,21 +902,22 @@ def imprimir_resumen_consola(datos):
             v = m.get("entropia_promedio") if m else None
             return f"{v:.3f}" if v is not None else "—"
 
-        def fila(nombre, fc, fa, fq, fi):
-            print(f"  {nombre:<30}{fc:>18}{fa:>18}{fq:>18}{fi:>18}")
+        def fila(nombre, fc, fa, fq, fm):
+            print(f"  {nombre:<30}{fc:>18}{fa:>18}{fq:>18}{fm:>18}")
 
-        fila("Métrica", "Clásico", "Aer", "QRydDemo", "IBM")
+        fila("Métrica", "Clásico", "Aer", "QRydDemo", "IQM")
         print(f"  {'-'*30}{'-'*18}{'-'*18}{'-'*18}{'-'*18}")
-        fila("Corridas", fmt_corridas(cl), fmt_corridas(ae), fmt_corridas(qr), fmt_corridas(ib))
-        fila("Iter. promedio ± std", fmti(cl), fmti(ae), fmti(qr), fmti(ib))
-        fila("Speedup iter. vs Clásico", "—", fmt_speedup(ae), fmt_speedup(qr), fmt_speedup(ib))
-        fila("Ratio iter / teórico", "—", fmt_ratio(ae), fmt_ratio(qr), fmt_ratio(ib))
-        fila("Tiempo promedio", fmtt(cl), fmtt(ae), fmtt(qr), fmtt(ib))
-        fila("Tasa de éxito (%)", "N/A", fmt_tasa(ae), fmt_tasa(qr), fmt_tasa(ib))
-        fila("Profundidad circuito", "N/A", fmt_prof(ae), fmt_prof(qr), fmt_prof(ib))
-        fila("Número de compuertas", "N/A", fmt_comp(ae), fmt_comp(qr), fmt_comp(ib))
-        fila("Compuertas / qubit", "N/A", fmt_cpq(ae), fmt_cpq(qr), fmt_cpq(ib))
-        fila("Entropía Shannon medic.", "N/A", fmt_entropia(ae), fmt_entropia(qr), fmt_entropia(ib))
+        fila("Corridas", fmt_corridas(cl), fmt_corridas(ae), fmt_corridas(qr), fmt_corridas(iq))
+        fila("Iter. promedio ± std", fmti(cl), fmti(ae), fmti(qr), fmti(iq))
+        fila("Speedup iter. vs Clásico", "—", fmt_speedup(ae), fmt_speedup(qr), fmt_speedup(iq))
+        fila("Ratio iter / teórico", "—", fmt_ratio(ae), fmt_ratio(qr), fmt_ratio(iq))
+        fila("Tiempo promedio", fmtt(cl), fmtt(ae), fmtt(qr), fmtt(iq))
+        fila("Tasa de éxito (%)", "N/A", fmt_tasa(ae), fmt_tasa(qr), fmt_tasa(iq))
+        fila("Acierto top-1 (%)", "N/A", fmt_top1(ae), fmt_top1(qr), fmt_top1(iq))
+        fila("Profundidad circuito", "N/A", fmt_prof(ae), fmt_prof(qr), fmt_prof(iq))
+        fila("Número de compuertas", "N/A", fmt_comp(ae), fmt_comp(qr), fmt_comp(iq))
+        fila("Compuertas / qubit", "N/A", fmt_cpq(ae), fmt_cpq(qr), fmt_cpq(iq))
+        fila("Entropía Shannon medic.", "N/A", fmt_entropia(ae), fmt_entropia(qr), fmt_entropia(iq))
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -851,11 +928,11 @@ def main():
 
     disponibles = {
         sis: any(datos[b][sis] is not None for b in QUBITS)
-        for sis in ("clasico", "aer", "qryd", "ibm")
+        for sis in ("clasico", "aer", "qryd", "iqm")
     }
     print(f"  Datos disponibles → Clásico: {disponibles['clasico']}  |  "
           f"Aer: {disponibles['aer']}  |  QRydDemo: {disponibles['qryd']}  |  "
-          f"IBM: {disponibles['ibm']}")
+          f"IQM: {disponibles['iqm']}")
 
     imprimir_resumen_consola(datos)
 
@@ -868,6 +945,7 @@ def main():
     fig_tasa_exito(datos)
     fig_eficiencia(datos)
     fig_tabla(datos)
+    fig_acierto_top1(datos)
 
     print("\nExportando tabla CSV...")
     exportar_tabla_csv(datos)

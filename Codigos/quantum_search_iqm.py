@@ -1,15 +1,24 @@
-"""Experimento de Grover en HARDWARE CUANTICO REAL de IBM Quantum Platform.
+"""Experimento de Grover en HARDWARE CUANTICO REAL de IQM Resonance.
 
 Este modulo es el equivalente en HARDWARE del modulo QRydDemo
-(`quantum_search_qryd.py`): implementa EXACTAMENTE el mismo algoritmo de Grover,
-el mismo barrido de iteraciones k, las mismas metricas extendidas y las MISMAS
-columnas de CSV, para que la comparacion entre modelos (clasico / Aer / QRyd /
-IBM) sea logica y directa.
+(`quantum_search_qryd.py`) y el gemelo directo de `quantum_search_ibm.py`:
+implementa EXACTAMENTE el mismo algoritmo de Grover, el mismo barrido de
+iteraciones k, las mismas metricas extendidas y las MISMAS columnas de CSV, para
+que la comparacion entre modelos (clasico / Aer / QRyd / IBM / IQM) sea logica y
+directa.
+
+Por que IQM Resonance
+─────────────────────
+Es una QPU superconductora (misma familia fisica que IBM), con provider NATIVO de
+Qiskit (`iqm-client[qiskit]`) y plan gratuito ("freemium"). Por eso el circuito de
+Grover y la transpilacion ISA quedan IDENTICOS a los de IBM: solo cambian la
+autenticacion, la seleccion de backend y la primitiva de ejecucion (aqui es el
+`backend.run(...)` clasico de Qiskit, igual que QRydDemo).
 
 Correspondencia con el Avance 2 (Q-Search)
 ──────────────────────────────────────────
 - Nivel 2 (Aer + QRydDemo): simulacion con analisis de recursos, n = 2..6.
-- Nivel 3 (IBM Quantum): ejecucion REAL, n = 2..4. El objetivo no es demostrar
+- Nivel 3 (hardware real): ejecucion REAL, n = 2..4. El objetivo no es demostrar
   escalamiento sino cuantificar la caida de la tasa de exito por decoherencia y
   errores. Por eso se registran las mismas metricas de recursos que QRydDemo
   (profundidad, compuertas, tasa de exito, distribucion de mediciones, etc.).
@@ -18,32 +27,30 @@ Diferencias tecnicas frente al simulador (obligatorias en hardware real)
 ────────────────────────────────────────────────────────────────────────
 1. Transpilacion a ISA circuit del backend con generate_preset_pass_manager
    (los circuitos del simulador NO corren tal cual en hardware).
-2. Ejecucion con la primitiva Runtime SamplerV2.
-3. Para minimizar overhead/consumo de QPU, el barrido de k de una corrida se
-   agrupa en UN SOLO job (lista de pubs). El modo por lotes agrupa ademas todas
-   las corridas de un nivel de qubits en un unico job. El RESULTADO (mejor k,
+2. Ejecucion con el runner clasico de Qiskit `backend.run(circuitos, shots=...)`.
+3. Para minimizar overhead/cola, el barrido de k de una corrida se agrupa en UNA
+   SOLA llamada (lista de circuitos). El modo por lotes agrupa ademas todas las
+   corridas de un nivel de qubits en una unica llamada. El RESULTADO (mejor k,
    metricas, seleccion) es identico al del barrido secuencial de QRyd/Aer.
-
-Presupuesto de QPU (Open Plan ~10 min/mes)
-──────────────────────────────────────────
-Segun la tabla del Avance 2, el hardware real corre para n = 2 y n = 4, con 25
-corridas por nivel (igual que los demas modelos). Usa siempre --dry-run primero
-para ver cuantos circuitos/shots se enviarian y estimar el consumo.
 
 Autenticacion (via .env, NO se hardcodea nada)
 ──────────────────────────────────────────────
-    IBM_QUANTUM_TOKEN=<API key de ~44 chars>
-    IBM_QUANTUM_CRN=<CRN o nombre de la instancia del Open Plan>
-Canal MODERNO 'ibm_quantum_platform' (el viejo 'ibm_quantum' fue retirado).
+    IQM_TOKEN=<API token del dashboard de IQM Resonance>
+    IQM_SERVER_URL=https://resonance.iqm.tech   (raiz de Resonance, comun a todos)
+    IQM_DEVICE=<alias del dispositivo, p.ej. emerald / garnet / deneb>
+El token, la Server URL y el alias del dispositivo (campo "Quantum computer
+alias") se obtienen en la ficha del dispositivo en https://resonance.iqm.tech/.
+En iqm-client 34 el dispositivo se elige por alias (quantum_computer=), NO por
+una URL especifica de dispositivo.
 
 Uso
 ───
-    python quantum_search_ibm.py --dry-run    # estima, NO envia job
-    python quantum_search_ibm.py              # lote 25 corridas x [2,4] (confirma)
-    python quantum_search_ibm.py --bits 2 --una-corrida   # 1 corrida (interfaz Aer)
+    python quantum_search_iqm.py --dry-run    # estima, NO envia job
+    python quantum_search_iqm.py              # lote 25 corridas x [2,4] (confirma)
+    python quantum_search_iqm.py --bits 2 --una-corrida   # 1 corrida (interfaz Aer)
 
 Requisitos:
-    pip install qiskit qiskit-ibm-runtime python-dotenv
+    pip install "iqm-client[qiskit]" qiskit python-dotenv
 """
 
 import argparse
@@ -61,9 +68,9 @@ from dotenv import load_dotenv
 from qiskit import QuantumCircuit
 from qiskit.circuit.library import grover_operator
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
-from qiskit_ibm_runtime import QiskitRuntimeService, SamplerV2 as Sampler
+from iqm.qiskit_iqm import IQMProvider
 
-# ─── Parametros del algoritmo (IDENTICOS a Aer/QRyd para comparacion justa) ───
+# ─── Parametros del algoritmo (IDENTICOS a Aer/QRyd/IBM para comparacion justa) ─
 NUM_QUBITS = 2                      # nivel por defecto en hardware real
 SHOTS = 512                        # shots por circuito. 1024 igualaria a Aer/QRyd
                                    # exacto, pero consume el doble de QPU.
@@ -82,20 +89,29 @@ OPTIMIZATION_LEVEL = 1            # nivel del pass manager (ISA obligatorio)
 ESTIM_SEG_OVERHEAD_POR_JOB = 3.0  # estimacion GRUESA de consumo (solo --dry-run)
 ESTIM_SEG_POR_CIRCUITO = 1.0
 
+# Server URL raiz de IQM Resonance y alias de dispositivo por defecto
+# (ambos se sobreescriben con IQM_SERVER_URL / IQM_DEVICE del .env).
+IQM_SERVER_URL_DEFAULT = "https://resonance.iqm.tech"
+IQM_DEVICE_DEFAULT = "emerald"
+
+# Limite de circuitos por job del dispositivo (Emerald: "Max. circuits" = 100).
+# El modo lote trocea el envio en bloques de este tamano.
+MAX_CIRCUITOS_POR_JOB = 100
+
 RESULTADOS_DIR = Path(__file__).resolve().parent / "results"
 
 
-def _csv_ibm(bits: int) -> Path:
+def _csv_iqm(bits: int) -> Path:
     """Ruta del CSV por nivel de qubits (una familia de archivos por bits)."""
-    return RESULTADOS_DIR / f"results_ibm_{bits}q.csv"
+    return RESULTADOS_DIR / f"results_iqm_{bits}q.csv"
 
 
-RESULTADOS_CSV = _csv_ibm(NUM_QUBITS)
+RESULTADOS_CSV = _csv_iqm(NUM_QUBITS)
 
 load_dotenv()
 
 
-# ─── CSV: MISMAS columnas que quantum_search_qryd.py ──────────────────────────
+# ─── CSV: MISMAS columnas que quantum_search_qryd.py / quantum_search_ibm.py ───
 ENCABEZADO_CSV = [
     "timestamp",
     "run_id",
@@ -154,7 +170,7 @@ def _preparar_csv(csv_path: Path) -> bool:
 
 
 def guardar_resultado_csv(fila: dict, csv_path: Path = RESULTADOS_CSV) -> None:
-    """Guarda una corrida (una fila) con las mismas columnas que QRyd."""
+    """Guarda una corrida (una fila) con las mismas columnas que QRyd/IBM."""
     csv_path.parent.mkdir(exist_ok=True)
     escribir_encabezado = _preparar_csv(csv_path)
     with csv_path.open("a", newline="", encoding="utf-8") as fh:
@@ -164,7 +180,7 @@ def guardar_resultado_csv(fila: dict, csv_path: Path = RESULTADOS_CSV) -> None:
         writer.writerow(fila)
 
 
-# ─── Construccion del circuito (IDENTICA a Aer/QRyd) ──────────────────────────
+# ─── Construccion del circuito (IDENTICA a Aer/QRyd/IBM) ──────────────────────
 def construir_oraculo(bits: int, llave: str) -> QuantumCircuit:
     """Oraculo de fase que marca un unico estado objetivo sin qubits ancilla.
 
@@ -227,85 +243,61 @@ def _plan_de_busqueda(bits: int):
 
 
 # ─── Autenticacion y backend ──────────────────────────────────────────────────
-def crear_service() -> QiskitRuntimeService:
-    """Crea el servicio Runtime con el canal moderno 'ibm_quantum_platform'.
+def crear_provider() -> IQMProvider:
+    """Crea el provider de IQM Resonance (raiz + alias de dispositivo).
 
-    Prioridad: (1) IBM_QUANTUM_TOKEN + IBM_QUANTUM_CRN del .env;
-               (2) cuenta guardada con QiskitRuntimeService.save_account(...).
+    En iqm-client 34 la Server URL es la raiz comun (https://resonance.iqm.tech)
+    y el dispositivo se selecciona por alias con quantum_computer=. El token NO se
+    pasa como argumento: iqm-client lo lee de la variable de entorno IQM_TOKEN
+    (que load_dotenv() ya cargo desde .env). Mezclar ambas fuentes (arg + env) es
+    un error explicito en iqm-client, por eso solo usamos la variable de entorno.
     """
-    token = os.environ.get("IBM_QUANTUM_TOKEN", "").strip()
-    crn = os.environ.get("IBM_QUANTUM_CRN", "").strip()
+    url = os.environ.get("IQM_SERVER_URL", "").strip() or IQM_SERVER_URL_DEFAULT
+    device = os.environ.get("IQM_DEVICE", "").strip() or IQM_DEVICE_DEFAULT
 
-    if token and crn:
-        return QiskitRuntimeService(
-            channel="ibm_quantum_platform", token=token, instance=crn
-        )
     try:
-        return QiskitRuntimeService()
+        return IQMProvider(url, quantum_computer=device)
     except Exception as exc:  # noqa: BLE001
         raise EnvironmentError(
-            "No se encontraron credenciales de IBM Quantum.\n"
+            "No se pudo crear el provider de IQM Resonance.\n"
             "Define en un archivo .env (en la raiz del proyecto):\n"
-            "    IBM_QUANTUM_TOKEN=<tu API key de ~44 chars>\n"
-            "    IBM_QUANTUM_CRN=<CRN o nombre de la instancia del Open Plan>\n"
-            "o guarda la cuenta con QiskitRuntimeService.save_account(...).\n"
+            "    IQM_TOKEN=<tu API token del dashboard de IQM Resonance>\n"
+            "    IQM_SERVER_URL=https://resonance.iqm.tech\n"
+            "    IQM_DEVICE=<alias del dispositivo, p.ej. emerald>\n"
             f"Detalle: {exc}"
         ) from exc
 
 
-def mostrar_uso_qpu(service: QiskitRuntimeService) -> None:
-    """Imprime el uso/tiempo restante de QPU si la API lo permite."""
+def mostrar_uso_qpu(provider: IQMProvider) -> None:
+    """Imprime informacion del dispositivo seleccionado (IQM no expone usage())."""
     try:
-        print(f"[USO] service.usage(): {service.usage()}")
+        backend = provider.get_backend()
+        print(f"[INFO] Dispositivo IQM: {backend.name} "
+              f"({backend.num_qubits} qubits)")
     except Exception as exc:  # noqa: BLE001
-        print(f"[USO] No se pudo obtener service.usage(): {exc}")
+        print(f"[INFO] No se pudo consultar el dispositivo IQM: {exc}")
 
 
-def _pending_jobs(backend) -> int:
-    """Cola del backend; un numero enorme si no se puede consultar (para ordenar)."""
-    try:
-        return backend.status().pending_jobs
-    except Exception:  # noqa: BLE001
-        return 10 ** 9
+def seleccionar_backend(provider: IQMProvider, min_qubits: int):
+    """Selecciona la QPU de IQM Resonance apuntada por IQM_SERVER_URL.
 
-
-def seleccionar_backend(service: QiskitRuntimeService, min_qubits: int):
-    """Selecciona una QPU real con >= min_qubits qubits.
-
-    1. Intento estandar: la QPU OPERATIVA y 'active' menos ocupada (least_busy).
-    2. Fallback: si ninguna esta 'active' (p.ej. todas en mantenimiento), elige
-       manualmente la real con menos cola y avisa que el job quedara encolado.
-    Devuelve None solo si la instancia no tiene ningun backend real suficiente.
+    En Resonance la URL ya identifica el dispositivo, asi que basta con
+    get_backend() y verificar que tenga suficientes qubits. Devuelve None si el
+    dispositivo no tiene >= min_qubits qubits o si no se puede obtener.
     """
-    # 1) Camino normal: la menos ocupada entre las operativas y activas.
     try:
-        return service.least_busy(
-            operational=True, simulator=False, min_num_qubits=min_qubits
-        )
+        backend = provider.get_backend()
     except Exception as exc:  # noqa: BLE001
-        print(f"[AVISO] Ninguna QPU 'active' con >= {min_qubits} qubits ahora "
-              f"mismo ({exc}). Probablemente en mantenimiento; buscando alternativa...")
-
-    # 2) Fallback: elegir manualmente la real con menos cola (aunque no este 'active').
-    try:
-        candidatos = list(service.backends(simulator=False, min_num_qubits=min_qubits))
-    except Exception as exc:  # noqa: BLE001
-        print(f"[AVISO] No se pudieron listar backends reales: {exc}")
+        print(f"[AVISO] No se pudo obtener el backend de IQM: {exc}")
         return None
-    if not candidatos:
-        print(f"[AVISO] La instancia no tiene ninguna QPU real con >= {min_qubits} qubits.")
+    if backend.num_qubits < min_qubits:
+        print(f"[AVISO] El dispositivo {backend.name} tiene {backend.num_qubits} "
+              f"qubits (< {min_qubits} requeridos). Se salta este nivel.")
         return None
-
-    candidatos.sort(key=_pending_jobs)
-    elegido = candidatos[0]
-    st = elegido.status()
-    print(f"[AVISO] Se usara {elegido.name} (estado='{st.status_msg}', "
-          f"cola={st.pending_jobs}). Si esta en mantenimiento, el job quedara "
-          f"ENCOLADO hasta que la QPU vuelva a estar disponible.")
-    return elegido
+    return backend
 
 
-# ─── Preparacion y seleccion (misma logica de seleccion que QRyd) ─────────────
+# ─── Preparacion y seleccion (misma logica de seleccion que QRyd/IBM) ─────────
 def _preparar_circuitos_corrida(pass_manager, bits: int, llave: str):
     """Transpila a ISA el barrido de k de UNA corrida.
 
@@ -321,7 +313,7 @@ def _preparar_circuitos_corrida(pass_manager, bits: int, llave: str):
 
 def _seleccionar_mejor(bits: int, llave: str, plan: list,
                        resultados_por_k: list, tiempo_busqueda_s: float) -> dict:
-    """Elige el mejor k por frecuencia de la llave (MISMA logica que QRyd).
+    """Elige el mejor k por frecuencia de la llave (MISMA logica que QRyd/IBM).
 
     `resultados_por_k` es una lista alineada con `plan`, cada elemento:
       {conteos, profundidad, num_compuertas, num_qubits_auxiliares,
@@ -397,15 +389,15 @@ def _seleccionar_mejor(bits: int, llave: str, plan: list,
     }
 
 
-def _counts_desde_pub(pub_result, creg_name: str) -> dict:
-    """Conteos (dict bitstring->cuentas) de un pub de SamplerV2."""
-    return getattr(pub_result.data, creg_name).get_counts()
+def _counts_desde_resultado(result, idx: int) -> dict:
+    """Conteos (dict bitstring->cuentas) del circuito idx de backend.run()."""
+    return result.get_counts(idx)
 
 
 def fila_csv(resultado: dict, *, run_id: str, backend_name: str, backend_version,
              bits: int, llave_str: str, llave_int: int, shots: int,
              tiempo_total_s: float) -> dict:
-    """Ensambla la fila del CSV con las columnas exactas de QRyd."""
+    """Ensambla la fila del CSV con las columnas exactas de QRyd/IBM."""
     return {
         "timestamp": datetime.now(timezone.utc)
             .isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -447,21 +439,21 @@ def estimar_consumo(n_jobs: int, n_circuitos: int) -> float:
     return n_jobs * ESTIM_SEG_OVERHEAD_POR_JOB + n_circuitos * ESTIM_SEG_POR_CIRCUITO
 
 
-# ─── Interfaz compatible con Aer/QRyd: main(bits, csv_path) ───────────────────
+# ─── Interfaz compatible con Aer/QRyd/IBM: main(bits, csv_path) ───────────────
 def main(bits: int = NUM_QUBITS, csv_path: Path = None, shots: int = SHOTS,
          auto_si: bool = True) -> None:
     """Ejecuta UNA corrida (barrido de k completo) de un nivel en HW real.
 
     Interfaz identica a quantum_search_qryd.main(bits, csv_path). El barrido de k
-    de esta corrida se agrupa en un solo job para minimizar consumo de QPU.
+    de esta corrida se agrupa en una sola llamada a backend.run para minimizar cola.
     """
     if csv_path is None:
-        csv_path = _csv_ibm(bits)
+        csv_path = _csv_iqm(bits)
 
-    service = crear_service()
-    backend = seleccionar_backend(service, min_qubits=bits)
+    provider = crear_provider()
+    backend = seleccionar_backend(provider, min_qubits=bits)
     if backend is None:
-        print(f"[AVISO] Sin QPU real con >= {bits} qubits. Se salta este nivel.")
+        print(f"[AVISO] Sin QPU de IQM con >= {bits} qubits. Se salta este nivel.")
         return
 
     run_id = str(uuid.uuid4())
@@ -471,7 +463,7 @@ def main(bits: int = NUM_QUBITS, csv_path: Path = None, shots: int = SHOTS,
     backend_version = getattr(backend, "version", "N/A")
 
     print("=" * 60)
-    print("  IBM Quantum – Grover en HARDWARE REAL (una corrida)")
+    print("  IQM Resonance – Grover en HARDWARE REAL (una corrida)")
     print("=" * 60)
     print(f"Run ID          : {run_id}")
     print(f"Backend         : {backend.name} (v{backend_version})")
@@ -483,7 +475,7 @@ def main(bits: int = NUM_QUBITS, csv_path: Path = None, shots: int = SHOTS,
         backend=backend, optimization_level=OPTIMIZATION_LEVEL,
         seed_transpiler=SEED_TRANSPILER,
     )
-    plan, isa, metricas, creg = _preparar_circuitos_corrida(pm, bits, llave_str)
+    plan, isa, metricas, _ = _preparar_circuitos_corrida(pm, bits, llave_str)
     print(f"k planificadas  : {len(plan)}  (hasta k={max(plan)})")
 
     if not auto_si:
@@ -494,9 +486,8 @@ def main(bits: int = NUM_QUBITS, csv_path: Path = None, shots: int = SHOTS,
             print("Cancelado. Nada consumido.")
             return
 
-    sampler = Sampler(mode=backend)
     inicio_job = time.perf_counter()
-    job = sampler.run(isa, shots=shots)
+    job = backend.run(isa, shots=shots)
     print(f"Job ID          : {job.job_id()}  |  estado: {job.status()}")
     print("Esperando resultados (puede tardar por la cola)...")
     result = job.result()
@@ -504,7 +495,7 @@ def main(bits: int = NUM_QUBITS, csv_path: Path = None, shots: int = SHOTS,
 
     resultados_por_k = []
     for idx, met in enumerate(metricas):
-        resultados_por_k.append({"conteos": _counts_desde_pub(result[idx], creg), **met})
+        resultados_por_k.append({"conteos": _counts_desde_resultado(result, idx), **met})
 
     resultado = _seleccionar_mejor(bits, llave_str, plan, resultados_por_k, tiempo_busqueda)
 
@@ -527,14 +518,14 @@ def main(bits: int = NUM_QUBITS, csv_path: Path = None, shots: int = SHOTS,
     print(f"Resultado guardado en: {csv_path}")
 
 
-# ─── Modo por LOTES: un job por nivel de qubits (recomendado para 25 corridas) ─
+# ─── Modo por LOTES: una llamada por nivel de qubits (25 corridas juntas) ──────
 def ejecutar_lote(dry_run: bool = False, auto_si: bool = False,
                   qubits=None, corridas: int = None, shots: int = None) -> None:
     """Ejecuta CORRIDAS_POR_QUBIT_HW corridas para cada nivel de QUBITS_OBJETIVO_HW.
 
     Para cada nivel de qubits agrupa TODAS las corridas (cada una con su barrido
-    de k) en UN SOLO job de SamplerV2. Esto minimiza cola y consumo de QPU y
-    produce exactamente las mismas 25 filas que produciria el barrido secuencial.
+    de k) en UNA SOLA llamada a backend.run. Esto minimiza cola y produce
+    exactamente las mismas 25 filas que produciria el barrido secuencial.
 
     Con --dry-run NO se envia nada: transpila, cuenta circuitos y estima consumo.
     """
@@ -543,19 +534,19 @@ def ejecutar_lote(dry_run: bool = False, auto_si: bool = False,
     shots = shots or SHOTS
 
     print("=" * 70)
-    print("  IBM Quantum – Grover en HARDWARE REAL (lote por niveles)")
+    print("  IQM Resonance – Grover en HARDWARE REAL (lote por niveles)")
     print("=" * 70)
     print(f"Niveles de qubits : {qubits}")
     print(f"Corridas/qubit    : {corridas}")
     print(f"Shots/circuito    : {shots}")
 
-    service = crear_service()
-    mostrar_uso_qpu(service)
+    provider = crear_provider()
+    mostrar_uso_qpu(provider)
 
     for bits in qubits:
-        backend = seleccionar_backend(service, min_qubits=bits)
+        backend = seleccionar_backend(provider, min_qubits=bits)
         if backend is None:
-            print(f"[AVISO] Sin QPU real con >= {bits} qubits. Se salta {bits}q.")
+            print(f"[AVISO] Sin QPU de IQM con >= {bits} qubits. Se salta {bits}q.")
             continue
         backend_version = getattr(backend, "version", "N/A")
 
@@ -585,11 +576,13 @@ def ejecutar_lote(dry_run: bool = False, auto_si: bool = False,
             })
 
         n_circuitos = len(todos_isa)
+        n_jobs = math.ceil(n_circuitos / MAX_CIRCUITOS_POR_JOB)
         print(f"Corridas          : {corridas}")
-        print(f"Circuitos totales : {n_circuitos}  (agrupados en 1 job)")
+        print(f"Circuitos totales : {n_circuitos}  (en {n_jobs} job(s) de "
+              f"<= {MAX_CIRCUITOS_POR_JOB} circuitos)")
         print(f"Shots totales     : {n_circuitos * shots:,}")
-        print(f"Estimacion QPU    : ~{estimar_consumo(1, n_circuitos):.0f} s "
-              f"(MUY aproximada; el valor real solo lo da service.usage())")
+        print(f"Estimacion QPU    : ~{estimar_consumo(n_jobs, n_circuitos):.0f} s "
+              f"(MUY aproximada; el valor real depende del dispositivo IQM)")
 
         if dry_run:
             print(f"[DRY-RUN] {bits}q: no se envio job. Nada consumido.")
@@ -603,12 +596,20 @@ def ejecutar_lote(dry_run: bool = False, auto_si: bool = False,
                 print(f"Cancelado el nivel {bits}q. Nada consumido.")
                 continue
 
-        sampler = Sampler(mode=backend)
+        # Envio troceado en bloques de <= MAX_CIRCUITOS_POR_JOB (limite del device).
+        # Se reconstruyen los conteos por indice global para no romper la
+        # correspondencia con corridas_meta (que indexa sobre todos_isa).
+        conteos_por_indice = [None] * n_circuitos
         inicio_job = time.perf_counter()
-        job = sampler.run(todos_isa, shots=shots)
-        print(f"Job ID            : {job.job_id()}  |  estado: {job.status()}")
-        print("Esperando resultados (puede tardar por la cola)...")
-        result = job.result()
+        for chunk_i, base in enumerate(range(0, n_circuitos, MAX_CIRCUITOS_POR_JOB), start=1):
+            chunk = todos_isa[base:base + MAX_CIRCUITOS_POR_JOB]
+            job = backend.run(chunk, shots=shots)
+            print(f"Job {chunk_i}/{n_jobs}       : {job.job_id()}  |  "
+                  f"{len(chunk)} circuitos  |  estado: {job.status()}")
+            print("Esperando resultados (puede tardar por la cola)...")
+            result = job.result()
+            for local in range(len(chunk)):
+                conteos_por_indice[base + local] = _counts_desde_resultado(result, local)
         tiempo_job = time.perf_counter() - inicio_job
         # Atribucion aproximada del tiempo a cada corrida.
         tiempo_por_corrida = tiempo_job / max(1, corridas)
@@ -619,7 +620,7 @@ def ejecutar_lote(dry_run: bool = False, auto_si: bool = False,
             resultados_por_k = []
             for idx_local, met in zip(c["indices"], c["metricas"]):
                 resultados_por_k.append(
-                    {"conteos": _counts_desde_pub(result[idx_local], c["creg"]), **met}
+                    {"conteos": conteos_por_indice[idx_local], **met}
                 )
             resultado = _seleccionar_mejor(
                 bits, c["llave_str"], c["plan"], resultados_por_k, tiempo_por_corrida
@@ -631,22 +632,23 @@ def ejecutar_lote(dry_run: bool = False, auto_si: bool = False,
                     llave_str=c["llave_str"], llave_int=c["llave_int"],
                     shots=shots, tiempo_total_s=tiempo_por_corrida,
                 ),
-                csv_path=_csv_ibm(bits),
+                csv_path=_csv_iqm(bits),
             )
             encontradas += int(resultado["encontrada"])
 
         print(f"Nivel {bits}q listo: {encontradas}/{corridas} encontradas "
-              f"→ {_csv_ibm(bits).name}")
+              f"→ {_csv_iqm(bits).name}")
 
-    print("\nUso de QPU tras el lote:")
-    mostrar_uso_qpu(service)
+    print("\nDispositivo IQM tras el lote:")
+    mostrar_uso_qpu(provider)
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Grover en hardware real de IBM (SamplerV2). Mismo algoritmo y "
-            "metricas que QRydDemo. Por defecto corre el lote de 25 corridas."
+            "Grover en hardware real de IQM Resonance (backend.run). Mismo "
+            "algoritmo y metricas que QRydDemo/IBM. Por defecto corre el lote de "
+            "25 corridas."
         )
     )
     parser.add_argument(
@@ -666,6 +668,13 @@ def _parse_args() -> argparse.Namespace:
         help=f"Qubits para --una-corrida (default: {NUM_QUBITS}).",
     )
     parser.add_argument(
+        "--qubits", type=int, nargs="+", default=None,
+        help=(
+            "Niveles de qubits del lote (default: "
+            f"{QUBITS_OBJETIVO_HW}). Ej: --qubits 4 para correr solo n=4."
+        ),
+    )
+    parser.add_argument(
         "--shots", type=int, default=SHOTS,
         help=f"Shots por circuito (default: {SHOTS}).",
     )
@@ -677,4 +686,5 @@ if __name__ == "__main__":
     if args.una_corrida:
         main(bits=args.bits, shots=args.shots, auto_si=args.auto_si)
     else:
-        ejecutar_lote(dry_run=args.dry_run, auto_si=args.auto_si, shots=args.shots)
+        ejecutar_lote(dry_run=args.dry_run, auto_si=args.auto_si,
+                      qubits=args.qubits, shots=args.shots)

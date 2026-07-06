@@ -3,8 +3,10 @@ qiskit-aer>=0.17
 matplotlib>=3.8
 # QRydDemo (Rydberg atom emulator) – requiere token en QRYD_API_TOKEN
 qiskit-qryd-provider>=0.6
-# IBM Quantum Platform (hardware real) – requiere IBM_QUANTUM_TOKEN + IBM_QUANTUM_CRN
-qiskit-ibm-runtime>=0.40
+# IQM Resonance (hardware real) – requiere IQM_TOKEN + IQM_SERVER_URL + IQM_DEVICE
+# Nota: iqm-client fija qiskit<2.2; convive con el resto en ejecución pero pip
+# puede mostrar avisos de versión (ver README).
+iqm-client[qiskit]>=34
 # Carga segura del token desde .env
 python-dotenv>=1.0
 
